@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytemuck = "1.25.2"
+# `download-libtorch` makes torch-sys fetch the matching libtorch (2.15.0) into target/ at build
+# time, so no manual install or LIBTORCH env var is needed. Setting LIBTORCH still overrides it.
+tch = { version = "0.27.0", features = ["download-libtorch"] }
+# Not used from Rust directly. Depending on it makes Cargo pass its `DEP_TCH_LIBTORCH_LIB`
+# metadata to build.rs, which uses it to set the rpath. Keep the version in sync with tch's.
+torch-sys = "0.27.0"
+
+[patch.crates-io]
+# torch-sys 0.27.0 with a one-line fix: its Apple Silicon download looks for a PyPI wheel name
+# PyTorch no longer publishes, so `download-libtorch` fails on arm64 macOS. See the PATCHED
+# comment in vendor/torch-sys/build.rs. Drop this once upstream tch-rs fixes it.
+torch-sys = { path = "vendor/torch-sys" }
