@@ -111,9 +111,13 @@ impl ScaleRegfile {
 }
 
 
-struct ArchState<const MACHINE_WIDTH: usize, const VMEM_SIZE: usize> {
+
+
+struct ArchState<const MACHINE_WIDTH: usize, const IMEM_SIZE: usize, const VMEM_SIZE: usize, const DRAM_SIZE: usize> {
     scalar_regfile: ScalarRegfile,
     scaling_regfile: ScaleRegfile,
     tensor_regfile: TensorRegfile<MACHINE_WIDTH, MACHINE_WIDTH>,
+    imem: [u8; IMEM_SIZE],
     vmem: [u8; VMEM_SIZE],
+    dram: [u8; DRAM_SIZE]
 }

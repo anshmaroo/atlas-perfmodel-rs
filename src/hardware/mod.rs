@@ -1,1 +1,2 @@
-pub mod arch_state;
+pub mod exu;
+pub mod mxu;
