@@ -49,11 +49,11 @@ impl MatrixUnit {
         }
     }
 
-    fn push_weight(&self, vd: WBuf, vs1: MReg) -> Plan {
-        let out = self.cfg.read_at + self.cfg.sram_latency;
+    fn push_weight(&self, vd: WBuf, vs1: MReg, port: Resource) -> Plan {
+        let (t, out) = (self.cfg.read_at, self.cfg.read_at + self.cfg.sram_latency);
         // each MRF row becomes one column of the weight tile
         vec![
-            self.single_read(mreg(vs1)),
+            Access::read(mreg(vs1), self.stream(t)).via(port),
             Access::write(self.wbuf(vd), self.stream(out)).via(Resource::WeightWrite(self.which)),
         ]
     }
@@ -82,17 +82,12 @@ impl MatrixUnit {
         plan
     }
 
-    fn push_acc(&self, vd: Acc, src: &[RegRef]) -> Plan {
+    fn push_acc(&self, vd: Acc, src: &[RegRef], ports: &[Resource]) -> Plan {
         let c = &self.cfg;
         let (t, out) = (c.read_at, c.read_at + c.sram_latency);
-        let mut plan = match *src {
-            [reg] => vec![self.single_read(reg)],
-            // read port i carries register i of a pair
-            _ => (0..)
-                .zip(src)
-                .map(|(i, &reg)| Access::read(reg, self.stream(t)).via(self.read_port(i)))
-                .collect(),
-        };
+        let mut plan: Plan = (src.iter().zip(ports))
+            .map(|(&reg, &port)| Access::read(reg, self.stream(t)).via(port))
+            .collect();
         plan.push(
             Access::write(self.acc(vd), self.stream(out))
                 .via(Resource::AccLoadPath(self.which))
@@ -117,11 +112,9 @@ impl MatrixUnit {
         plan
     }
 
-    // A single register streams on read port 1 if it's free, else port 0 (port 0 is the only one
-    // wired to the array).
-    fn single_read(&self, reg: RegRef) -> Access {
-        Access::read(reg, self.stream(self.cfg.read_at))
-            .via_either(self.read_port(1), self.read_port(0))
+    // a single-register push streams on read port 1 if it's free, else port 0 
+    fn single_push(&self, plan: impl Fn(Resource) -> Plan) -> Vec<Plan> {
+        vec![plan(self.read_port(1)), plan(self.read_port(0))]
     }
 
     fn read_port(&self, i: u8) -> Resource {
@@ -154,30 +147,31 @@ impl MatrixUnit {
 }
 
 impl ExecutionUnit for MatrixUnit {
-    fn plan(&self, insn: &Instruction) -> Plan {
+    fn plan(&self, insn: &Instruction) -> Vec<Plan> {
         assert_eq!(insn.spec().exu, self.exu(), "{insn} does not issue to {:?}", self.which);
         use Instruction as I;
         match *insn {
             I::VmatpushWeightMxu0 { vd, vs1 } | I::VmatpushWeightMxu1 { vd, vs1 } => {
-                self.push_weight(vd, vs1)
+                self.single_push(|port| self.push_weight(vd, vs1, port))
             }
             I::VmatmulMxu0 { vd, vs1, vs2 } | I::VmatmulMxu1 { vd, vs1, vs2 } => {
-                self.matmul(vd, vs1, vs2, false)
+                vec![self.matmul(vd, vs1, vs2, false)]
             }
             I::VmatmulAccMxu0 { vd, vs1, vs2 } | I::VmatmulAccMxu1 { vd, vs1, vs2 } => {
-                self.matmul(vd, vs1, vs2, true)
+                vec![self.matmul(vd, vs1, vs2, true)]
             }
             I::VmatpushAccFp8Mxu0 { vd, vs1 } | I::VmatpushAccFp8Mxu1 { vd, vs1 } => {
-                self.push_acc(vd, &[mreg(vs1)])
+                self.single_push(|port| self.push_acc(vd, &[mreg(vs1)], &[port]))
             }
             I::VmatpushAccBf16Mxu0 { vd, vs1 } | I::VmatpushAccBf16Mxu1 { vd, vs1 } => {
-                self.push_acc(vd, &pair(vs1))
+                // a bf16 pair streams on both read ports at once
+                vec![self.push_acc(vd, &pair(vs1), &[self.read_port(0), self.read_port(1)])]
             }
             I::VmatpopFp8AccMxu0 { vd, vs2, es1 } | I::VmatpopFp8AccMxu1 { vd, vs2, es1 } => {
-                self.pop(vs2, &[mreg(vd)], Some(es1))
+                vec![self.pop(vs2, &[mreg(vd)], Some(es1))]
             }
             I::VmatpopBf16AccMxu0 { vd, vs2 } | I::VmatpopBf16AccMxu1 { vd, vs2 } => {
-                self.pop(vs2, &pair(vd), None)
+                vec![self.pop(vs2, &pair(vd), None)]
             }
             _ => unimplemented!("no MXU timing for {insn}"),
         }

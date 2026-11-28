@@ -1,3 +1,4 @@
+use crate::hardware::vpu::LaneBox;
 use crate::isa::{Exu, Instruction, Mxu, RegFile, RegRef};
 
 
@@ -18,7 +19,7 @@ impl Window {
         Self { at, rows: 1, stride: 0, hold: 0 }
     }
 
-    // rows touched one after another, `stride` cycles apart
+    // rows touched one after another, stride cycles apart
     pub const fn stream(at: u32, rows: u32, stride: u32) -> Self {
         assert!(rows > 0, "a window touches at least one row");
         Self { at, rows, stride, hold: 0 }
@@ -53,6 +54,8 @@ pub enum Resource {
     AccWrite(Mxu, u8),
     // weight buffer write port
     WeightWrite(Mxu),
+    // VPU lane box: one op streams through it at a time, from either slot
+    LaneBox(LaneBox),
     // an MRF bank SRAM ports (1R1W per bank)
     MrfBankRead(u8),
     MrfBankWrite(u8),
@@ -89,14 +92,6 @@ impl From<RegRef> for Loc {
     }
 }
 
-// hardware an access streams through - i.e. MXU port engines
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Via {
-    One(Resource),
-    // `prefer` if it's free for the whole access, else `fallback`
-    Either { prefer: Resource, fallback: Resource },
-}
-
 // one location read or written over a window and the hardware the stream holds while it runs
 // scoreboard will check the location for data hazards and hardware for data hazards
 
@@ -105,7 +100,8 @@ pub struct Access {
     pub loc: Loc,
     pub write: bool,
     pub win: Window,
-    pub via: Vec<Via>,
+    // hardware the stream holds, e.g. a unit's MRF port or a lane box
+    pub via: Vec<Resource>,
 }
 
 impl Access {
@@ -118,12 +114,7 @@ impl Access {
     }
 
     pub fn via(mut self, res: Resource) -> Self {
-        self.via.push(Via::One(res));
-        self
-    }
-
-    pub fn via_either(mut self, prefer: Resource, fallback: Resource) -> Self {
-        self.via.push(Via::Either { prefer, fallback });
+        self.via.push(res);
         self
     }
 }
@@ -131,6 +122,6 @@ impl Access {
 // sequence of accesses an instruction takes (micro-ops?)
 pub type Plan = Vec<Access>;
 
-pub trait ExecutionUnit { 
-    fn plan(&self, insn: &Instruction) -> Plan;
+pub trait ExecutionUnit {
+    fn plan(&self, insn: &Instruction) -> Vec<Plan>;
 }
